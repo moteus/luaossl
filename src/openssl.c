@@ -3291,35 +3291,156 @@ sslerr:
 } /* pk_encrypt() */
 
 
+static const EVP_MD *md_optdigest(lua_State*, int);
+
 static int pk_sign(lua_State *L) {
 	EVP_PKEY *key = checksimple(L, 1, PKEY_CLASS);
-	EVP_MD_CTX *md = checksimple(L, 2, DIGEST_CLASS);
-	luaL_Buffer B;
-	unsigned n;
+	EVP_MD_CTX *md_ctx;
 
-	if (LUAL_BUFFERSIZE < EVP_PKEY_size(key))
-		return luaL_error(L, "pkey:sign: LUAL_BUFFERSIZE(%u) < EVP_PKEY_size(%u)", (unsigned)LUAL_BUFFERSIZE, (unsigned)EVP_PKEY_size(key));
+	if ((md_ctx = testsimple(L, 2, DIGEST_CLASS))) {
+		luaL_Buffer B;
+		unsigned n;
 
-	luaL_buffinit(L, &B);
-	n = LUAL_BUFFERSIZE;
+		if (LUAL_BUFFERSIZE < EVP_PKEY_size(key))
+			return luaL_error(L, "pkey:sign: LUAL_BUFFERSIZE(%u) < EVP_PKEY_size(%u)", (unsigned)LUAL_BUFFERSIZE, (unsigned)EVP_PKEY_size(key));
 
-	if (!EVP_SignFinal(md, (void *)luaL_prepbuffer(&B), &n, key))
+		luaL_buffinit(L, &B);
+		n = LUAL_BUFFERSIZE;
+
+		if (!EVP_SignFinal(md_ctx, (void *)luaL_prepbuffer(&B), &n, key))
+			return auxL_error(L, auxL_EOPENSSL, "pkey:sign");
+
+		luaL_addsize(&B, n);
+		luaL_pushresult(&B);
+
+		return 1;
+	} else {
+		size_t outlen, inlen;
+		EVP_PKEY_CTX *ctx;
+		const char *str = luaL_checklstring(L, 2, &inlen);
+		BIO *bio;
+		BUF_MEM *buf;
+		int rsaPadding = RSA_PKCS1_PADDING; /* default for `openssl rsautl` */
+		int rsaPssSaltlen = -2;
+		const EVP_MD *md = NULL;
+		int base_type = EVP_PKEY_base_id(key);
+
+		if (lua_istable(L, 3)) {
+			if (base_type == EVP_PKEY_RSA) {
+				lua_getfield(L, 3, "rsaPadding");
+				rsaPadding = luaL_optint(L, -1, rsaPadding);
+				lua_pop(L, 1);
+
+				lua_getfield(L, 3, "rsaPssSaltlen");
+				rsaPssSaltlen = luaL_optint(L, -1, rsaPssSaltlen);
+				lua_pop(L, 1);
+			}
+
+			lua_getfield(L, 3, "md");
+			md = md_optdigest(L, -1);
+			lua_pop(L, 1);
+		}
+
+		bio = getbio(L);
+		BIO_get_mem_ptr(bio, &buf);
+
+		if (!(ctx = EVP_PKEY_CTX_new(key, NULL)))
+			goto sslerr;
+
+		if (EVP_PKEY_sign_init(ctx) <= 0)
+			goto sslerr;
+
+		if (base_type == EVP_PKEY_RSA && !EVP_PKEY_CTX_set_rsa_padding(ctx, rsaPadding))
+			goto sslerr;
+
+		if (md && !EVP_PKEY_CTX_set_signature_md(ctx, md))
+			goto sslerr;
+
+		if (base_type == EVP_PKEY_RSA && !EVP_PKEY_CTX_set_rsa_pss_saltlen(ctx, rsaPssSaltlen))
+			goto sslerr;
+
+		if (EVP_PKEY_sign(ctx, NULL, &outlen, str, inlen) <= 0)
+			goto sslerr;
+
+		if (!BUF_MEM_grow_clean(buf, outlen))
+			goto sslerr;
+
+		if (EVP_PKEY_sign(ctx, buf->data, &outlen, str, inlen) <= 0)
+			goto sslerr;
+
+		EVP_PKEY_CTX_free(ctx);
+		ctx = NULL;
+
+		lua_pushlstring(L, buf->data, outlen);
+
+		return 1;
+	sslerr:
+		if (ctx) {
+			EVP_PKEY_CTX_free(ctx);
+			ctx = NULL;
+		}
+
 		return auxL_error(L, auxL_EOPENSSL, "pkey:sign");
-
-	luaL_addsize(&B, n);
-	luaL_pushresult(&B);
-
-	return 1;
+	}
 } /* pk_sign() */
 
 
 static int pk_verify(lua_State *L) {
 	EVP_PKEY *key = checksimple(L, 1, PKEY_CLASS);
+	EVP_PKEY_CTX *ctx;
 	size_t len;
 	const void *sig = luaL_checklstring(L, 2, &len);
-	EVP_MD_CTX *md = checksimple(L, 3, DIGEST_CLASS);
+	EVP_MD_CTX *md_ctx;
+	int res;
 
-	switch (EVP_VerifyFinal(md, sig, len, key)) {
+	if ((md_ctx = testsimple(L, 3, DIGEST_CLASS))) {
+		res = EVP_VerifyFinal(md_ctx, sig, len, key);
+	} else {
+		size_t tbslen;
+		const void *tbs = luaL_checklstring(L, 3, &tbslen);
+		int rsaPadding = RSA_PKCS1_PADDING; /* default for `openssl rsautl` */
+		int rsaPssSaltlen = -2;
+		const EVP_MD *md = NULL;
+		int base_type = EVP_PKEY_base_id(key);
+
+		if (lua_istable(L, 4)) {
+			if (base_type == EVP_PKEY_RSA) {
+				lua_getfield(L, 4, "rsaPadding");
+				rsaPadding = luaL_optint(L, -1, rsaPadding);
+				lua_pop(L, 1);
+
+				lua_getfield(L, 4, "rsaPssSaltlen");
+				rsaPssSaltlen = luaL_optint(L, -1, rsaPssSaltlen);
+				lua_pop(L, 1);
+			}
+
+			lua_getfield(L, 4, "md");
+			md = md_optdigest(L, -1);
+			lua_pop(L, 1);
+		}
+
+		if (!(ctx = EVP_PKEY_CTX_new(key, NULL)))
+			goto sslerr;
+
+		if (EVP_PKEY_verify_init(ctx) <= 0)
+			goto sslerr;
+
+		if (base_type == EVP_PKEY_RSA && !EVP_PKEY_CTX_set_rsa_padding(ctx, rsaPadding))
+			goto sslerr;
+
+		if (md && !EVP_PKEY_CTX_set_signature_md(ctx, md))
+			goto sslerr;
+
+		if (base_type == EVP_PKEY_RSA && !EVP_PKEY_CTX_set_rsa_pss_saltlen(ctx, rsaPssSaltlen))
+			goto sslerr;
+
+		res = EVP_PKEY_verify(ctx, sig, len, tbs, tbslen);
+
+		EVP_PKEY_CTX_free(ctx);
+		ctx = NULL;
+	}
+
+	switch (res) {
 	case 0: /* WRONG */
 		ERR_clear_error();
 		lua_pushboolean(L, 0);
@@ -3330,6 +3451,11 @@ static int pk_verify(lua_State *L) {
 
 		break;
 	default:
+sslerr:
+		if (ctx) {
+			EVP_PKEY_CTX_free(ctx);
+			ctx = NULL;
+		}
 		return auxL_error(L, auxL_EOPENSSL, "pkey:verify");
 	}
 
