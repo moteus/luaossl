@@ -1248,7 +1248,14 @@ static const EVP_MD *auxL_optdigest(lua_State *L, int index, EVP_PKEY *key, cons
  * OpenSSL by taking another reference to ourselves.
  */
 static int dl_anchor(void) {
-#if HAVE_DLADDR
+#if _WIN32
+	EXPORT extern int luaopen__openssl(lua_State *);
+
+	if (!GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_PIN|GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (void *)&luaopen__openssl, NULL))
+		return GetLastError();
+
+	return 0;
+#elif HAVE_DLADDR
 	extern int luaopen__openssl(lua_State *);
 	static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 	static void *anchor;
