@@ -7179,6 +7179,15 @@ static int xs_add(lua_State *L) {
 				X509_CRL_free(crl_dup);
 				return auxL_error(L, auxL_EOPENSSL, "x509.store:add");
 			}
+
+			/* When a CRL was added, enable CRL checking (entire chain) */
+			/* FIXME: do we want this done automatically or not? */
+			X509_VERIFY_PARAM *param = X509_VERIFY_PARAM_new();
+			X509_VERIFY_PARAM_set_flags(param, X509_V_FLAG_CRL_CHECK);
+			X509_VERIFY_PARAM_set_flags(param, X509_V_FLAG_CRL_CHECK_ALL);
+			X509_STORE_set1_param(store, param);
+			X509_VERIFY_PARAM_free(param);
+
 		} else {
 			const char *path = luaL_checkstring(L, i);
 			struct stat st;
