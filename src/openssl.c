@@ -3052,7 +3052,7 @@ static int pk_new(lua_State *L) {
 	EVP_PKEY **ud;
 
 	/* #1 table or key; if key, #2 format and #3 type */
-	lua_settop(L, 3);
+	lua_settop(L, 4);
 
 	ud = prepsimple(L, PKEY_CLASS);
 
@@ -3218,7 +3218,7 @@ creat:
 	} else if (lua_isstring(L, 1)) {
 		int type = optencoding(L, 2, "*", X509_ANY|X509_PEM|X509_DER);
 		int pubonly = 0, prvtonly = 0;
-		const char *opt, *data;
+		const char *opt, *data, *pwd;
 		size_t len;
 		BIO *bio;
 		EVP_PKEY *pub = NULL, *prvt = NULL;
@@ -3235,6 +3235,9 @@ creat:
 			}
 		}
 
+		/* check if password was specified */
+		pwd = luaL_optstring(L, 4, NULL);
+
 		data = luaL_checklstring(L, 1, &len);
 
 		if (!(bio = BIO_new_mem_buf((void *)data, len)))
@@ -3249,14 +3252,14 @@ creat:
 				 */
 				BIO_reset(bio);
 
-				if (!(pub = PEM_read_bio_PUBKEY(bio, NULL, 0, "")))
+				if (!(pub = PEM_read_bio_PUBKEY(bio, NULL, NULL, (void*)pwd)))
 					goterr = 1;
 			}
 
 			if (!pubonly && !prvt) {
 				BIO_reset(bio);
 
-				if (!(prvt = PEM_read_bio_PrivateKey(bio, NULL, 0, "")))
+				if (!(prvt = PEM_read_bio_PrivateKey(bio, NULL, NULL, (void*)pwd)))
 					goterr = 1;
 			}
 		}

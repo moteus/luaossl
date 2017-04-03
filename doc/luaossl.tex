@@ -268,9 +268,11 @@ Add or interpose a bignum class method. Returns the previous method, if any.
 
 \module{openssl.pkey} binds OpenSSL's libcrypto public-private key library. The \fn{\_\_tostring} metamethod generates a PEM encoded representation of the public key---excluding the private key.
 
-\subsubsection[\fn{pkey.new}]{\fn{pkey.new($string$[, $format$])}}
+\subsubsection[\fn{pkey.new}]{\fn{pkey.new($string$[, $format$[, $keytype$[, $passphrase$]]])}}
 
 Initializes a new pkey object from the PEM- or DER-encoded key in $string$. $format$ defaults to ``*'', which means to automatically test the input encoding. If $format$ is explicitly ``PEM'' or ``DER'', then only that decoding format is used.
+$keytype$ defaults to both private and public key, but can be set explicitly to ``private'' or ``public''.
+$passphrase$ is the decoding passphrase. When absent or nil, while a password is required, the default OpenSSL callback will be used, which will typically prompt for the passphrase on the current terminal with echoing turned off.
 
 On failure throws an error.
 
