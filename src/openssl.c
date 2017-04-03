@@ -1782,12 +1782,8 @@ static int compat_X509_up_ref(X509 *crt) {
 #endif
 
 static int compat_init(void) {
-	static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 	static int store_index = -1, ssl_ctx_index = -1, done;
 	int error = 0;
-
-	if ((error = pthread_mutex_lock(&mutex)))
-		return error;
 
 	if (done)
 		goto epilog;
@@ -1858,8 +1854,6 @@ epilog:
 		X509_STORE_free(compat.tmp.store);
 		compat.tmp.store = NULL;
 	}
-
-	(void)pthread_mutex_unlock(&mutex);
 
 	return error;
 sslerr:
@@ -1985,13 +1979,9 @@ static void ex_onfree(void *parent NOTUSED, void *_data, CRYPTO_EX_DATA *ad NOTU
 } /* ex_onfree() */
 
 static int ex_init(void) {
-	static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 	static int done;
 	struct ex_type *type;
 	int error = 0;
-
-	if ((error = pthread_mutex_lock(&mutex)))
-		return error;
 
 	if (done)
 		goto epilog;
@@ -2013,8 +2003,6 @@ static int ex_init(void) {
 
 	done = 1;
 epilog:
-	(void)pthread_mutex_unlock(&mutex);
-
 	return error;
 sslerr:
 	error = auxL_EOPENSSL;
@@ -10119,12 +10107,11 @@ static void initall(lua_State *L) {
 	static int initssl;
 	int error;
 
-	if ((error = mt_init()))
-		auxL_error(L, error, "openssl.init");
-
 	pthread_mutex_lock(&mutex);
 
-	if (!initssl) {
+	error = mt_init();
+
+	if (!error && !initssl) {
 		initssl = 1;
 
 		SSL_load_error_strings();
@@ -10138,12 +10125,15 @@ static void initall(lua_State *L) {
 		OPENSSL_config(NULL);
 	}
 
+	if (!error)
+		error = compat_init();
+
+	if (!error)
+		error = ex_init();
+
 	pthread_mutex_unlock(&mutex);
 
-	if ((error = compat_init()))
-		auxL_error(L, error, "openssl.init");
-
-	if ((error = ex_init()))
+	if (error)
 		auxL_error(L, error, "openssl.init");
 
 	ex_newstate(L);
