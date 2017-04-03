@@ -52,10 +52,10 @@
 #endif
 #include <fcntl.h>        /* O_RDONLY O_CLOEXEC open(2) */
 #include <unistd.h>       /* close(2) getpid(2) */
-#include <pthread.h>      /* pthread_mutex_init(3) pthread_mutex_lock(3) pthread_mutex_unlock(3) */
 #ifdef __WIN32
 #define EXPORT  __declspec (dllexport)
 #else
+#include <pthread.h>      /* pthread_mutex_init(3) pthread_mutex_lock(3) pthread_mutex_unlock(3) */
 #include <sys/resource.h> /* RUSAGE_SELF struct rusage getrusage(2) */
 #include <sys/utsname.h>  /* struct utsname uname(3) */
 #include <dlfcn.h>        /* dladdr(3) dlopen(3) */
@@ -10034,15 +10034,27 @@ EXPORT int luaopen__openssl_des(lua_State *L) {
  * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 static struct {
+#if _WIN32
+	HANDLE *lock;
+#else
 	pthread_mutex_t *lock;
+#endif
 	int nlock;
 } mt_state;
 
 static void mt_lock(int mode, int type, const char *file NOTUSED, int line NOTUSED) {
 	if (mode & CRYPTO_LOCK)
+#if _WIN32
+		WaitForSingleObject(mt_state.lock[type], INFINITE);
+#else
 		pthread_mutex_lock(&mt_state.lock[type]);
+#endif
 	else
+#if _WIN32
+		ReleaseMutex(mt_state.lock[type]);
+#else
 		pthread_mutex_unlock(&mt_state.lock[type]);
+#endif
 } /* mt_lock() */
 
 /*
@@ -10068,6 +10080,8 @@ static unsigned long mt_gettid(void) {
 	return id;
 #elif __NetBSD__
 	return _lwp_self();
+#elif _WIN32
+	return GetCurrentThreadId();
 #else
 	/*
 	 * pthread_t is an integer on Solaris and Linux, an unsigned integer
@@ -10078,12 +10092,25 @@ static unsigned long mt_gettid(void) {
 } /* mt_gettid() */
 
 static int mt_init(void) {
-	static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 	static int done, bound;
 	int error = 0;
 
+#if _WIN32
+	static volatile HANDLE mutex = NULL;
+	if (mutex == NULL) {
+		HANDLE p;
+		if (!(p = CreateMutex(NULL, FALSE, NULL)))
+			return GetLastError();
+		if (InterlockedCompareExchangePointer((PVOID*)&mutex, (PVOID)p, NULL) != NULL)
+			CloseHandle(p);
+	}
+	if (WaitForSingleObject(mutex, INFINITE) == WAIT_FAILED)
+		return GetLastError();
+#else
+	static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 	if ((error = pthread_mutex_lock(&mutex)))
 		return error;
+#endif
 
 	if (done)
 		goto epilog;
@@ -10100,9 +10127,17 @@ static int mt_init(void) {
 			}
 
 			for (i = 0; i < mt_state.nlock; i++) {
+#if _WIN32
+				if (!(mt_state.lock[i] = CreateMutex(NULL, FALSE, NULL))) {
+#else
 				if ((error = pthread_mutex_init(&mt_state.lock[i], NULL))) {
+#endif
 					while (i > 0) {
+#if _WIN32
+						CloseHandle(mt_state.lock[--i]);
+#else
 						pthread_mutex_destroy(&mt_state.lock[--i]);
+#endif
 					}
 
 					free(mt_state.lock);
@@ -10127,18 +10162,35 @@ static int mt_init(void) {
 
 	done = 1;
 epilog:
+#if _WIN32
+	CloseHandle(mutex);
+#else
 	pthread_mutex_unlock(&mutex);
+#endif
 
 	return error;
 } /* mt_init() */
 
 
 static void initall(lua_State *L) {
-	static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 	static int initssl;
 	int error;
 
+#if _WIN32
+	static volatile HANDLE mutex = NULL;
+	if (mutex == NULL) {
+		HANDLE p;
+		if (!(p = CreateMutex(NULL, FALSE, NULL)))
+			auxL_error(L, GetLastError(), "openssl.init");
+		if (InterlockedCompareExchangePointer((PVOID*)&mutex, (PVOID)p, NULL) != NULL)
+			CloseHandle(p);
+	}
+	if (WaitForSingleObject(mutex, INFINITE) == WAIT_FAILED)
+		auxL_error(L, GetLastError(), "openssl.init");
+#else
+	static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 	pthread_mutex_lock(&mutex);
+#endif
 
 	error = mt_init();
 
@@ -10162,7 +10214,11 @@ static void initall(lua_State *L) {
 	if (!error)
 		error = ex_init();
 
+#if _WIN32
+	CloseHandle(mutex);
+#else
 	pthread_mutex_unlock(&mutex);
+#endif
 
 	if (error)
 		auxL_error(L, error, "openssl.init");
