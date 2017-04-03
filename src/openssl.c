@@ -3060,6 +3060,7 @@ static int pk_new(lua_State *L) {
 		int type = EVP_PKEY_RSA;
 		unsigned bits = 1024;
 		unsigned exp = 65537;
+		int generator = 2;
 		int curve = NID_X9_62_prime192v1;
 		const char *id;
 		const char *dhparam = NULL;
@@ -3106,6 +3107,11 @@ static int pk_new(lua_State *L) {
 
 		/* dhparam field can contain a PEM encoded string. */
 		loadfield(L, 1, "dhparam", LUA_TSTRING, &dhparam);
+
+		if (loadfield(L, 1, "generator", LUA_TNUMBER, &n)) {
+			luaL_argcheck(L, n > 1 && n <= INT_MAX, 1, lua_pushfstring(L, "%f: `generator' invalid", n));
+			generator = (int)n;
+		}
 
 creat:
 		if (!(*ud = EVP_PKEY_new()))
@@ -3157,7 +3163,7 @@ creat:
 				BIO_free(bio);
 				if (!dh)
 					return auxL_error(L, auxL_EOPENSSL, "pkey.new");
-			} else if (!(dh = DH_generate_parameters(bits, exp, 0, 0)))
+			} else if (!(dh = DH_generate_parameters(bits, generator, 0, 0)))
 				return auxL_error(L, auxL_EOPENSSL, "pkey.new");
 
 
