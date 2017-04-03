@@ -3149,6 +3149,7 @@ creat:
 		}
 		case EVP_PKEY_DH: {
 			DH *dh;
+			int codes=0;
 
 			/* DH Parameter Generation can take a long time, therefore we look
 			 * at the "dhparam" field, provided by the user.
@@ -3166,6 +3167,16 @@ creat:
 			} else if (!(dh = DH_generate_parameters(bits, generator, 0, 0)))
 				return auxL_error(L, auxL_EOPENSSL, "pkey.new");
 
+			/* int DH_check(const DH *dh, int *codes);
+			 * DH_check() validates Diffie-Hellman parameters. It checks that p
+			 * is a safe prime, and that g is a suitable generator. In the case
+			 * of an error, the bit flags DH_CHECK_P_NOT_SAFE_PRIME or
+			 * DH_NOT_SUITABLE_GENERATOR are set in *codes.
+			 */
+			if (0 == DH_check(dh, &codes) || 0 != codes) {
+				DH_free(dh);
+				return auxL_error(L, auxL_EOPENSSL, "pkey.new");
+			}
 
 			if (!DH_generate_key(dh)) {
 				DH_free(dh);
